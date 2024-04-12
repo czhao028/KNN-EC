@@ -13,6 +13,7 @@ from utils.dataprocessor import getTrainData,getTestData
 from transformers import BertTokenizer,get_linear_schedule_with_warmup, AutoTokenizer, AutoModel
 from torch.utils.data import  DataLoader, RandomSampler, SequentialSampler
 from sklearn.model_selection import KFold
+import matplotlib.pyplot as plt
 
 if torch.cuda.is_available():
     device = torch.device("cuda")
@@ -43,6 +44,7 @@ def train(config):
 
     history_F1 = list()
     history_trainingAcc = list()
+    history_validationAcc = list()
     history_loss=list()
     #train model
     for epoch in range(num_epochs):
@@ -132,14 +134,20 @@ def train(config):
             predict_labels_validation=[y for x in predict_labels_validation for y in x]
             kfoldValidationTrueLabels.extend(true_labels_validation)
             kfoldValidationPredictLabels.extend(predict_labels_validation)
-
             #print(classification_report(true_labels,predict_labels,digits=4))
         f1=f1_score(kfoldValidationTrueLabels,kfoldValidationPredictLabels,average='macro')
         history_F1.append(f1)
         history_loss.append(sum(trainingLossPerEpoch) / len(trainingLossPerEpoch))
         history_trainingAcc.append(sum(trainingAccuracyPerEpoch) / len(trainingAccuracyPerEpoch))
+        validationAccuracy = accuracy_score(kfoldValidationTrueLabels, kfoldValidationPredictLabels)
+        history_validationAcc.append(validationAccuracy)
         if config['training']['save_model'] and len(trainingLossPerEpoch) > 0:
             torch.save(model, "/path_to_store_checkpoint/{}_{}.pt".format(model_name,f1))
+    print(f"F1 scores: {history_F1}")
+    print(f"LOSSES: {history_loss}")
+    print(f"TRAINING ACCURACIES: {history_trainingAcc}")
+    print(f"VALIDATION ACCURACIES: {history_validationAcc}")
+    plot_training_history(history_loss, train_acc=history_trainingAcc, val_acc=history_validationAcc, val_f1=history_F1)
 
 def test(config):
     np.random.seed(config['general']['seed'])
@@ -179,7 +187,6 @@ def test(config):
     true_labels=[y for x in true_labels for y in x]
     predict_labels=[y for x in predict_labels for y in x]
     print(classification_report(true_labels,predict_labels,digits=4))
-
 
 
 def knnTest(config):
@@ -266,6 +273,41 @@ def knnTest(config):
     bert_labels=[y for x in bert_labels for y in x]
     
     print(classification_report(true_labels,predict_labels,digits=4))
+
+
+def plot_training_history(train_losses, train_acc=None, val_acc=None, val_f1=None, filename='training_history.png'):
+    plt.figure(figsize=(15, 5))
+
+    # Plotting training loss
+    plt.subplot(1, 3, 1)
+    plt.plot(train_losses, label='Training Loss')
+    plt.xlabel('Epoch')
+    plt.ylabel('Loss')
+    plt.title('Training Loss')
+    plt.legend()
+
+    # Plotting training accuracy
+    plt.subplot(1, 3, 2)
+    plt.plot(train_acc, label='Training Accuracy')
+    if val_acc:
+        plt.plot(val_acc, label='Validation Accuracy')
+    plt.xlabel('Epoch')
+    plt.ylabel('Accuracy')
+    plt.title('Training Accuracy')
+    plt.legend()
+
+    # Plotting F1 scores
+    plt.subplot(1, 3, 3)
+    if val_f1:
+        plt.plot(val_f1, label='Validation F1 Score')
+    plt.xlabel('Epoch')
+    plt.ylabel('F1 Score')
+    plt.title('F1 Score')
+    plt.legend()
+
+    plt.tight_layout()
+    plt.show()
+    plt.savefig(filename)
 
 
 def main():
