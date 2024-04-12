@@ -9,7 +9,7 @@ import numpy as np
 from utils.bertWhiteness import BertWhitening,transform_and_normalize,neg_softmax,softmax
 from models.model import  BertForSequenceClassification
 from sklearn.metrics import classification_report,f1_score,accuracy_score
-from utils.dataprocessor import getTrainData,getTestData,getDevData
+from utils.dataprocessor import getTrainData,getTestData
 from transformers import BertTokenizer,get_linear_schedule_with_warmup, AutoTokenizer, AutoModel
 from torch.utils.data import  DataLoader, RandomSampler, SequentialSampler
 from sklearn.model_selection import KFold
@@ -40,8 +40,14 @@ def train(config):
     num_folds = config['training']['num_folds']
     batch_size = config['training']['train_batch_size']
     num_epochs = config['training']['num_train_epochs']
+
+    history_F1 = list()
+    history_trainingAcc = list()
+    history_loss=list()
     #train model
     for epoch in range(num_epochs):
+        trainingLossPerEpoch = list()
+        trainingAccuracyPerEpoch = list()
         # Perform cross-validation
         kf = KFold(n_splits=num_folds, shuffle=True, random_state=42)
         kfoldValidationPredictLabels = list()
@@ -77,12 +83,10 @@ def train(config):
 
             # Train model for each epoch within this fold
             model.train()
-            total_loss, total_correct, total_samples = 0, 0, 0
-            predictions, targets = [], []
-
+            total_loss,step=0,0
+            trainingAccuracyPerBatch = list()
             with tqdm(train_dataloader,
                               desc=f"Fold {fold + 1}/{num_folds} - Epoch {epoch + 1}/{num_epochs} - Training") as tepoch:
-                total_loss,step=0,0
                 for batch in tepoch:
                     tepoch.set_description(f"Epoch {epoch+1}/{config['training']['num_train_epochs']}")
                     b_input_ids, b_input_mask,b_labels = batch[0].to(device),batch[1].to(device),batch[2].long().to(device)
@@ -102,9 +106,13 @@ def train(config):
 
                     predict=np.argmax(outputs[1].detach().cpu().numpy(), axis=1)
                     step+=1
-                    tepoch.set_postfix(average_loss=total_loss/step,loss=loss.item(),f1=f1_score(batch[2].flatten(),predict.flatten(),average='weighted') ,accuracy='{:.3f}'.format(accuracy_score(batch[2].flatten(),predict.flatten())))
+                    training_acc = accuracy_score(batch[2].flatten(),predict.flatten())
+                    trainingAccuracyPerBatch.append(training_acc)
+                    tepoch.set_postfix(average_loss=total_loss/step,loss=loss.item(),f1=f1_score(batch[2].flatten(),predict.flatten(),average='weighted') ,accuracy='{:.3f}'.format(training_acc))
                     time.sleep(0.0001)
-        
+            trainingAccuracyPerEpoch.append(sum(trainingAccuracyPerBatch) / len(trainingAccuracyPerBatch))
+            averageLossThisEpoch = total_loss / step
+            trainingLossPerEpoch.append(averageLossThisEpoch)
             #eval model
             model.eval()
             #validation set accuracy/f1 score
@@ -127,7 +135,10 @@ def train(config):
 
             #print(classification_report(true_labels,predict_labels,digits=4))
         f1=f1_score(kfoldValidationTrueLabels,kfoldValidationPredictLabels,average='macro')
-        if config['training']['save_model']:
+        history_F1.append(f1)
+        history_loss.append(sum(trainingLossPerEpoch) / len(trainingLossPerEpoch))
+        history_trainingAcc.append(sum(trainingAccuracyPerEpoch) / len(trainingAccuracyPerEpoch))
+        if config['training']['save_model'] and len(trainingLossPerEpoch) > 0:
             torch.save(model, "/path_to_store_checkpoint/{}_{}.pt".format(model_name,f1))
 
 def test(config):
