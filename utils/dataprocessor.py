@@ -4,22 +4,55 @@ import torch
 import pickle
 import pandas as pd
 from torch.utils.data import TensorDataset
+import re
+# Get the current directory of the script
+current_directory = os.path.dirname(os.path.realpath(__file__))
+parent_directory = os.path.dirname(current_directory)
+# Construct the path to the JSON file
+json_file_path = os.path.join(parent_directory, 'data', 'emotionToId.json')
 
-emotionNum2ekmanNum=json.load(open('/path_to_store_your/emotionNum2ekmanNum.json', 'r'))
+# Read the JSON file
+with open(json_file_path, 'r') as file:
+    emotionNum2ekmanNum = json.load(file)
+
+#Same as from https://github.com/cl-victor1/ling573-project/blob/main/src/agentic_workflow/fine_tune.py
+def replace_repeated_punctuation(text): # NB: this function might have adverse impact
+    # Define a regular expression pattern to match repeated punctuation separated by spaces
+    pattern = r'(\s*[\.,;:!?]+\s*)+'
+    # Replace occurrences of the pattern with a single punctuation mark
+    replaced_text = re.sub(pattern, lambda m: m.group(1)[0] + " ", text)
+    return replaced_text
+
+def merge_capitalized_letters(input_string):
+    def replace_match(match):
+        # Get the matched substring
+        matched_string = match.group(0)
+        # Compress uppercase letters separated by spaces
+        replacement_string = re.sub(" ", "", matched_string)
+        return replacement_string
+    # Define the pattern
+    pattern = r'\b[A-Z](?:\s[A-Z])*\b'  # Pattern to match a string with uppercase letters separated by spaces
+    return re.sub(pattern, replace_match, input_string)
+
+def clean_tweet(tweet):
+    tweet = tweet.replace("@user", "")
+    tweet = tweet.replace("http", "")
+    tweet = replace_repeated_punctuation(tweet)
+    tweet = merge_capitalized_letters(tweet)
+    return tweet
+
 
 def getData(tokenizer,file_name):
     
-    data=pd.read_csv(file_name,sep='\t',header=None)
+    data=pd.read_csv(file_name,sep='\t')
     
-    data=data[data[1]!='27'] #Remove neutral labels
-    data=data[[len(label.split(','))==1 for label in data[1].tolist()]] #Remove mutil labels
+    #data=data[data[1]!='27'] #Remove neutral labels
+    #data=data[[len(label.split(','))==1 for label in data[1].tolist()]] #Remove mutil labels
     
-    sents=[tokenizer(sent.lower(),padding='max_length',truncation=True,max_length=128) for sent in data[0].tolist()]
+    sents=[tokenizer(clean_tweet(sent.lower()),padding='max_length',truncation=True,max_length=128) for sent in data.iloc[:, 1].values.tolist()]
     sents_input_ids=torch.tensor([temp["input_ids"] for temp in sents])
     sents_attn_masks=torch.tensor([temp["attention_mask"] for temp in sents])
-    
-    labels=torch.tensor([emotionNum2ekmanNum[label] for label in data[1].tolist()])
-    
+    labels=torch.tensor([emotionNum2ekmanNum[label] for label in data.iloc[:, 2].values.tolist()])
     dataset=TensorDataset(sents_input_ids,sents_attn_masks,labels)
     
     return dataset
