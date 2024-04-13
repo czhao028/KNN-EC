@@ -42,47 +42,44 @@ def train(config):
     batch_size = config['training']['train_batch_size']
     num_epochs = config['training']['num_train_epochs']
 
-    history_F1 = list()
-    history_trainingAcc = list()
-    history_validationAcc = list()
-    history_loss=list()
+    history_F1 = np.zeros(shape=(num_folds, num_epochs))
+    history_trainingAcc = np.zeros(shape=(num_folds, num_epochs))
+    history_validationAcc = np.zeros(shape=(num_folds, num_epochs))
+    history_loss=np.zeros(shape=(num_folds, num_epochs))
     #train model
-    for epoch in range(num_epochs):
-        trainingLossPerEpoch = list()
-        trainingAccuracyPerEpoch = list()
-        # Perform cross-validation
-        kf = KFold(n_splits=num_folds, shuffle=True, random_state=42)
-        kfoldValidationPredictLabels = list()
-        kfoldValidationTrueLabels = list()
-        for fold, (train_index, val_index) in enumerate(kf.split(dataset)):
-            print(f"Fold {fold + 1}/{num_folds}")
+    kf = KFold(n_splits=num_folds, shuffle=True, random_state=42)
+    kfoldValidationPredictLabels = list()
+    kfoldValidationTrueLabels = list()
+    # Perform cross-validation
+    for fold, (train_index, val_index) in enumerate(kf.split(dataset)):
+        print(f"Fold {fold + 1}/{num_folds}")
 
-            # Split data into training and validation sets for this fold
-            train_dataset = [dataset[i] for i in train_index]
-            val_dataset = [dataset[i] for i in val_index]
-            # Initialize model for each fold
-            model = BertForSequenceClassification.from_pretrained(
-                model_name,
-                num_labels=config['model']['num_classes'],
-                output_attentions=False,  # Whether the model returns attentions weights.
-                output_hidden_states=False,  # Whether the model returns all hidden-states.
-            )
-            train_dataloader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
-            val_dataloader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False)
-            optimizer = torch.optim.AdamW(model.parameters(),
-                                          lr=eval(config['training']['learning_rate']),
-                                          # args.learning_rate - default is 5e-5, our notebook had 2e-5
-                                          eps=1e-8  # args.adam_epsilon  - default is 1e-8.
-                                          )
-            total_steps = num_folds * len(train_dataloader) * config['training']['num_train_epochs']
-            scheduler = get_linear_schedule_with_warmup(optimizer,
-                                                        num_warmup_steps=config['training']['warmup_prop'],
-                                                        # Default value in run_glue.py
-                                                        num_training_steps=total_steps
-                                                        )
+        # Split data into training and validation sets for this fold
+        train_dataset = [dataset[i] for i in train_index]
+        val_dataset = [dataset[i] for i in val_index]
+        # Initialize model for each fold
+        model = BertForSequenceClassification.from_pretrained(
+            model_name,
+            num_labels=config['model']['num_classes'],
+            output_attentions=False,  # Whether the model returns attentions weights.
+            output_hidden_states=False,  # Whether the model returns all hidden-states.
+        )
+        train_dataloader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
+        val_dataloader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False)
+        optimizer = torch.optim.AdamW(model.parameters(),
+                                      lr=eval(config['training']['learning_rate']),
+                                      # args.learning_rate - default is 5e-5, our notebook had 2e-5
+                                      eps=1e-8  # args.adam_epsilon  - default is 1e-8.
+                                      )
+        total_steps = num_folds * len(train_dataloader) * config['training']['num_train_epochs']
+        scheduler = get_linear_schedule_with_warmup(optimizer,
+                                                    num_warmup_steps=config['training']['warmup_prop'],
+                                                    # Default value in run_glue.py
+                                                    num_training_steps=total_steps
+                                                    )
 
-            model.to(device)
-
+        model.to(device)
+        for epoch in range(num_epochs):
             # Train model for each epoch within this fold
             model.train()
             total_loss,step=0,0
@@ -112,9 +109,9 @@ def train(config):
                     trainingAccuracyPerBatch.append(training_acc)
                     tepoch.set_postfix(average_loss=total_loss/step,loss=loss.item(),f1=f1_score(batch[2].flatten(),predict.flatten(),average='weighted') ,accuracy='{:.3f}'.format(training_acc))
                     time.sleep(0.0001)
-            trainingAccuracyPerEpoch.append(sum(trainingAccuracyPerBatch) / len(trainingAccuracyPerBatch))
+            history_trainingAcc[fold][epoch] = sum(trainingAccuracyPerBatch) / len(trainingAccuracyPerBatch)
             averageLossThisEpoch = total_loss / step
-            trainingLossPerEpoch.append(averageLossThisEpoch)
+            history_loss[fold][epoch] = averageLossThisEpoch
             #eval model
             model.eval()
             #validation set accuracy/f1 score
@@ -135,19 +132,17 @@ def train(config):
             kfoldValidationTrueLabels.extend(true_labels_validation)
             kfoldValidationPredictLabels.extend(predict_labels_validation)
             #print(classification_report(true_labels,predict_labels,digits=4))
-        f1=f1_score(kfoldValidationTrueLabels,kfoldValidationPredictLabels,average='macro')
-        history_F1.append(f1)
-        history_loss.append(sum(trainingLossPerEpoch) / len(trainingLossPerEpoch))
-        history_trainingAcc.append(sum(trainingAccuracyPerEpoch) / len(trainingAccuracyPerEpoch))
-        validationAccuracy = accuracy_score(kfoldValidationTrueLabels, kfoldValidationPredictLabels)
-        history_validationAcc.append(validationAccuracy)
-        if config['training']['save_model'] and len(trainingLossPerEpoch) > 0:
-            torch.save(model, "/path_to_store_checkpoint/{}_{}.pt".format(model_name,f1))
-    print(f"F1 scores: {history_F1}")
-    print(f"LOSSES: {history_loss}")
-    print(f"TRAINING ACCURACIES: {history_trainingAcc}")
-    print(f"VALIDATION ACCURACIES: {history_validationAcc}")
-    plot_training_history(history_loss, train_acc=history_trainingAcc, val_acc=history_validationAcc, val_f1=history_F1)
+            f1=f1_score(kfoldValidationTrueLabels,kfoldValidationPredictLabels,average='macro')
+            history_F1[fold][epoch] = f1
+            validationAccuracy = accuracy_score(kfoldValidationTrueLabels, kfoldValidationPredictLabels)
+            history_validationAcc[fold][epoch] = validationAccuracy
+            if config['training']['save_model'] and num_epochs > 0:
+                torch.save(model, "{}/{}_epoch{}_f1{}.pt".format(config['data']['data_path'], model_name.replace("/", "-"),epoch, f1))
+            print(f"F1 scores: {history_F1}")
+            print(f"LOSSES: {history_loss}")
+            print(f"TRAINING ACCURACIES: {history_trainingAcc}")
+            print(f"VALIDATION ACCURACIES: {history_validationAcc}")
+            plot_training_history(np.mean(history_loss,axis=0), train_acc=np.mean(history_trainingAcc,axis=0), val_acc=np.mean(history_validationAcc,axis=0), val_f1=np.mean(history_F1,axis=0))
 
 def test(config):
     np.random.seed(config['general']['seed'])
@@ -196,8 +191,9 @@ def knnTest(config):
     os.environ["CUDA_VISIBLE_DEVICES"] = config['training']['gpu_ids']
     
     model_name=config['model']['model_name']
-    tokenizer = BertTokenizer.from_pretrained(model_name)
-    model=torch.load(config['testing']['model_path'])
+    tokenizer = AutoModel.from_pretrained(model_name)
+    #TODO change map_location=torch.device('cpu')
+    model=torch.load(config['testing']['model_path'], map_location=torch.device('cpu'))
     model.to(device)
     
     datastore_path=config['knnTest']['datastore_path']+str(config['knnTest']['n_components'])+'.bin'
@@ -218,8 +214,8 @@ def knnTest(config):
             outputs = model(b_input_ids, 
                 token_type_ids=None, 
                 attention_mask=b_input_mask)
-            embedd=outputs[1]
-            kernel, bias =BertWhitening(embedd,config['knnTest']['n_components'])
+            embedd=outputs[1].detach().numpy()
+            kernel, bias =BertWhitening(embedd)
             vecs=transform_and_normalize(embedd, kernel, bias)
             index_embed.add(vecs.cpu().detach().numpy())
             train_labels.append(b_labels)
@@ -228,7 +224,8 @@ def knnTest(config):
         np.save(config['knnTest']['train_labels'],train_labels,allow_pickle=True, fix_imports=True)
     
     
-    test_data=getTestData(tokenizer,model_name,config['data']['data_path'])
+    #test_data=getTestData(tokenizer,model_name,config['data']['data_path'])
+    test_data = getTrainData(tokenizer, model_name, config['data']['data_path'])
     test_sampler = SequentialSampler(test_data)
     test_dataloader = DataLoader(test_data, sampler=test_sampler, batch_size=config['knnTest']['test_batch_size'])
     
@@ -276,6 +273,11 @@ def knnTest(config):
 
 
 def plot_training_history(train_losses, train_acc=None, val_acc=None, val_f1=None, filename='training_history.png'):
+    print("Inside plot_training_history!")
+    print(f"F1 scores: {val_f1}")
+    print(f"LOSSES: {train_losses}")
+    print(f"TRAINING ACCURACIES: {train_acc}")
+    print(f"VALIDATION ACCURACIES: {val_acc}")
     plt.figure(figsize=(15, 5))
 
     # Plotting training loss
@@ -289,8 +291,6 @@ def plot_training_history(train_losses, train_acc=None, val_acc=None, val_f1=Non
     # Plotting training accuracy
     plt.subplot(1, 3, 2)
     plt.plot(train_acc, label='Training Accuracy')
-    if val_acc:
-        plt.plot(val_acc, label='Validation Accuracy')
     plt.xlabel('Epoch')
     plt.ylabel('Accuracy')
     plt.title('Training Accuracy')
@@ -298,11 +298,13 @@ def plot_training_history(train_losses, train_acc=None, val_acc=None, val_f1=Non
 
     # Plotting F1 scores
     plt.subplot(1, 3, 3)
-    if val_f1:
+    if val_f1 is not None:
         plt.plot(val_f1, label='Validation F1 Score')
+    if val_acc is not None:
+        plt.plot(val_acc, label='Validation Accuracy')
     plt.xlabel('Epoch')
     plt.ylabel('F1 Score')
-    plt.title('F1 Score')
+    plt.title('Validation Metrics')
     plt.legend()
 
     plt.tight_layout()
@@ -315,7 +317,8 @@ def main():
     with open(str(project_root / "config.yml")) as f:
         config = yaml.load(f, Loader=yaml.FullLoader)
         
-    train(config)
+    #train(config)
+    knnTest(config)
 
 if __name__ == '__main__':
     main()
