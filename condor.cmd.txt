@@ -1,0 +1,9 @@
+executable = knnBert.sh
+getenv     = true
+output     = run.out
+error      = run.error
+log        = run.log
+notification = complete
+transfer_executable = true
+request_GPUs=1
+queue

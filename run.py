@@ -13,6 +13,7 @@ from utils.dataprocessor import getTrainData,getTestData
 from transformers import BertTokenizer,get_linear_schedule_with_warmup, AutoTokenizer, AutoModel
 from torch.utils.data import  DataLoader, RandomSampler, SequentialSampler
 from sklearn.model_selection import KFold
+#from pykeops.torch import LazyTensor
 import matplotlib.pyplot as plt
 
 if torch.cuda.is_available():
@@ -311,6 +312,120 @@ def plot_training_history(train_losses, train_acc=None, val_acc=None, val_f1=Non
     plt.show()
     plt.savefig(filename)
 
+def knnTest2(config):
+    np.random.seed(config['general']['seed'])
+    torch.manual_seed(config['general']['seed'])
+    torch.cuda.manual_seed_all(config['general']['seed'])
+    os.environ["CUDA_VISIBLE_DEVICES"] = config['training']['gpu_ids']
+
+    model_name = config['model']['model_name']
+    tokenizer = AutoTokenizer.from_pretrained(model_name)
+    model = torch.load(config['testing']['model_path'])
+    model.to(device)
+
+    num_folds = config['training']['num_folds']
+    batch_size = config['knnTest']['test_batch_size']
+    # test_data=getTestData(tokenizer,model_name,config['data']['data_path'])
+    train_data = getTrainData(tokenizer, model_name, config['data']['data_path'])
+    test_data = getTrainData(tokenizer, model_name, config['data']['data_path'])
+
+    # list_of_arrays = list()
+    # i = 0
+    # for batch in train_dataloader:
+    #   train_input_ids, train_input_mask,train_labels = batch[0].to(device), batch[1].to(device),batch[2]#.long().to(device)
+    #   #print(train_input_ids.shape)
+    #   print(i)
+    #   i+=1
+    #   train_outputs = model(train_input_ids,
+    #           token_type_ids=None,
+    #           attention_mask=train_input_mask)
+    #   train_batch_embeds = train_outputs[1].detach().cpu().numpy()
+    #   list_of_arrays.append(train_batch_embeds)
+    # train_embeds = np.concatenate(list_of_arrays, axis=0).astype("float32")
+
+    # k = config['knnTest']['k']   # we want to see k nearest neighbors
+    # alpha=config['knnTest']['alpha']
+    k_values = np.arange(3, 20)
+    heat_map = np.zeros(shape=(1, len(k_values)))
+    kf = KFold(n_splits=num_folds, shuffle=True, random_state=42)
+    allf1scores = list()
+    for j, k in enumerate(k_values):
+        true_labels, predict_labels = [], []
+        knn = KNeighborsClassifier(n_neighbors=k_values)
+        f1scores = list()
+        for fold, (train_index, val_index) in enumerate(kf.split(train_data)):
+
+            train_dataset = [train_data[i] for i in train_index]
+            val_dataset = [train_data[i] for i in val_index]
+            train_sampler = SequentialSampler(train_dataset)
+            train_dataloader = DataLoader(train_data, sampler=train_sampler, batch_size=batch_size)
+
+            model.eval()
+            train_embedds = list()
+            num = 0
+            # training embeddings
+            for batch in train_dataloader:
+                num += 1
+                print(num)
+                b_input_ids, b_input_mask, b_labels = batch[0].to(device), batch[1].to(device), batch[
+                    2]  # .long().to(device)
+                outputs = model(b_input_ids,
+                                token_type_ids=None,
+                                attention_mask=b_input_mask)
+
+                train_embedd = outputs[1].detach().cpu().numpy()
+                train_embedds.append(train_embedd)
+                # predict_labels.append(np.argmax(res, axis=1).flatten())
+                true_labels.append(b_labels.flatten())
+
+            true_labels = np.array([y for x in true_labels for y in x])
+            train_embeds = np.concatenate(train_embedds, axis=0).astype("float32")
+            knn.fit(train_embeds, true_labels)
+            # validation embeddings
+            test_sampler = SequentialSampler(val_dataset)
+            test_dataloader = DataLoader(val_dataset, sampler=test_sampler, batch_size=batch_size)
+            test_embeddings_list = list()
+            true_labels_test = list()
+            for batch in test_dataloader:
+                b_input_ids, b_input_mask, b_labels = batch[0].to(device), batch[1].to(device), batch[
+                    2]  # .long().to(device)
+                outputs = model(b_input_ids,
+                                token_type_ids=None,
+                                attention_mask=b_input_mask)
+                test_embedd = outputs[1].detach().cpu().numpy()
+                test_embeddings_list.append(test_embedd)
+                true_labels_test.append(b_labels.flatten())
+            true_labels_test = np.array([y for x in true_labels_test for y in x])
+            test_embeds = np.concatenate(test_embeddings_list, axis=0).astype("float32")
+            predict_labels = knn.predict(test_embeds)
+
+            print(classification_report(true_labels_test, predict_labels, digits=4))
+            f1 = f1_score(true_labels_test, predict_labels, average="macro")
+
+            f1scores.append(f1)
+        avg_f1 = np.mean(np.array(f1scores))
+        print(f"F1 score for k={k} is {avg_f1}")
+        allf1scores.append(avg_f1)
+    plt.plot(k_values, allf1scores)
+
+    # Add title and labels
+    plt.title('Effect of k in KNN on prediction accuracy')
+    plt.xlabel('k-values')
+    plt.ylabel('cross-validation accuracy')
+
+    # Display the plot
+    plt.show()
+
+    # Save the plot
+    plt.savefig('k_line_graph.png')
+    # heat_map[1][j] = f1
+
+    # plt.imshow(heat_map)
+    # plt.title("F1 score on English training data")
+    # plt.xlabel("k-value for KNN")
+    # plt.ylabel("alpha hyperparameter")
+    # plt.show()
+
 
 def main():
     project_root: Path = Path(__file__).parent
@@ -318,7 +433,7 @@ def main():
         config = yaml.load(f, Loader=yaml.FullLoader)
         
     #train(config)
-    knnTest(config)
+    knnTest2(config)
 
 if __name__ == '__main__':
     main()
