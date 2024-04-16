@@ -26,12 +26,14 @@ testing:
 
 knnTest:
   train_datastore_size: 64 #for roberta-large;bert 64
-  test_batch_size: 128 #for roberta-large;bert 64
+  test_batch_size: 16 #for roberta-large;bert 64
   n_components: 256
   datastore_path: path_to_store_your_knnDatastore
   train_labels: path_to_store_your_knnDatastore_train_labels
-  k: 16 # we want to see k nearest neighbors
+  k: 3 # we want to see k nearest neighbors
   alpha: 0.8 
   temperature: 0.1
+  model_file: knnpickle_file
+  prediction_results: dev_results.tsv
 general:
   seed: 42

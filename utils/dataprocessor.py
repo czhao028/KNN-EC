@@ -5,6 +5,7 @@ import pickle
 import pandas as pd
 from torch.utils.data import TensorDataset
 import re
+import csv
 # Get the current directory of the script
 current_directory = os.path.dirname(os.path.realpath(__file__))
 parent_directory = os.path.dirname(current_directory)
@@ -90,3 +91,12 @@ def getTestData(tokenizer,bert_name,data_path):
         with open(feature_file, 'wb') as w:
             pickle.dump(test_dataset, w)
     return test_dataset
+
+def saveTestResults(test_data_input_filename, prediction_values, output_file_name):
+    data = pd.read_csv(test_data_input_filename, sep='\t')
+    sentIds = data.iloc[:, 0].values.tolist()
+    tsvfile = open(output_file_name, 'w', newline='')
+    writer = csv.writer(tsvfile, delimiter='\t', lineterminator='\n')
+    writer.writerow(["ID", "Labels"])
+    for i, predict_val in enumerate(prediction_values):
+        writer.writerow([sentIds[i], predict_val])

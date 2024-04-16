@@ -9,12 +9,14 @@ import numpy as np
 from utils.bertWhiteness import BertWhitening,transform_and_normalize,neg_softmax,softmax
 from models.model import  BertForSequenceClassification
 from sklearn.metrics import classification_report,f1_score,accuracy_score
-from utils.dataprocessor import getTrainData,getTestData
+from utils.dataprocessor import getTrainData,getTestData,saveTestResults
 from transformers import BertTokenizer,get_linear_schedule_with_warmup, AutoTokenizer, AutoModel
 from torch.utils.data import  DataLoader, RandomSampler, SequentialSampler
 from sklearn.model_selection import KFold
 #from pykeops.torch import LazyTensor
 import matplotlib.pyplot as plt
+from sklearn.neighbors import KNeighborsClassifier
+import pickle
 
 if torch.cuda.is_available():
     device = torch.device("cuda")
@@ -185,94 +187,6 @@ def test(config):
     print(classification_report(true_labels,predict_labels,digits=4))
 
 
-def knnTest(config):
-    np.random.seed(config['general']['seed'])
-    torch.manual_seed(config['general']['seed'])
-    torch.cuda.manual_seed_all(config['general']['seed'])
-    os.environ["CUDA_VISIBLE_DEVICES"] = config['training']['gpu_ids']
-    
-    model_name=config['model']['model_name']
-    tokenizer = AutoModel.from_pretrained(model_name)
-    #TODO change map_location=torch.device('cpu')
-    model=torch.load(config['testing']['model_path'], map_location=torch.device('cpu'))
-    model.to(device)
-    
-    datastore_path=config['knnTest']['datastore_path']+str(config['knnTest']['n_components'])+'.bin'
-    if os.path.exists(datastore_path):
-        index_embed=faiss.read_index(datastore_path)
-        train_labels=np.load(config['knnTest']['train_labels'], mmap_mode=None, allow_pickle=False, fix_imports=True, encoding='ASCII')
-    else:
-        train_data=getTrainData(tokenizer,model_name,config['data']['data_path'])
-        train_sampler = SequentialSampler(train_data)
-        train_dataloader = DataLoader(train_data, sampler=train_sampler, batch_size=config['knnTest']['train_datastore_size'])
-        
-        index_embed = faiss.IndexFlatL2(config['knnTest']['n_components'])
-        
-        model.eval()
-        train_labels=[]
-        for batch in train_dataloader:
-            b_input_ids, b_input_mask,b_labels = batch[0].to(device),batch[1].to(device),batch[2]
-            outputs = model(b_input_ids, 
-                token_type_ids=None, 
-                attention_mask=b_input_mask)
-            embedd=outputs[1].detach().numpy()
-            kernel, bias =BertWhitening(embedd)
-            vecs=transform_and_normalize(embedd, kernel, bias)
-            index_embed.add(vecs.cpu().detach().numpy())
-            train_labels.append(b_labels)
-        train_labels=np.array([label.item() for labels in train_labels for label in labels])
-        faiss.write_index(index_embed,datastore_path)
-        np.save(config['knnTest']['train_labels'],train_labels,allow_pickle=True, fix_imports=True)
-    
-    
-    #test_data=getTestData(tokenizer,model_name,config['data']['data_path'])
-    test_data = getTrainData(tokenizer, model_name, config['data']['data_path'])
-    test_sampler = SequentialSampler(test_data)
-    test_dataloader = DataLoader(test_data, sampler=test_sampler, batch_size=config['knnTest']['test_batch_size'])
-    
-    
-    k = config['knnTest']['k']   # we want to see k nearest neighbors
-    alpha=config['knnTest']['alpha']
-    
-    true_labels,predict_labels=[],[]
-    bert_labels,knn_labels=[],[]
-    model.eval()
-    for batch in test_dataloader:
-        b_input_ids, b_input_mask,b_labels = batch[0].to(device),batch[1].to(device),batch[2]#.long().to(device)
-        outputs = model(b_input_ids, 
-                    token_type_ids=None, 
-                    attention_mask=b_input_mask)
-        
-        embedd=outputs[1]
-        
-        if config['knnTest']['n_components']==768:
-            vecs=embedd
-        else:
-            kernel, bias =BertWhitening(embedd,config['knnTest']['n_components'])
-            vecs=transform_and_normalize(embedd, kernel, bias)
-        
-        
-        D, I = index_embed.search(vecs.cpu().detach().numpy(), k) 
-        Distance=np.tile(neg_softmax(D,t=config['knnTest']['temperature']).reshape(-1,k,1), (1,6))
-        Index_label=np.eye(6)[train_labels[I]]
-        
-        Knn_res=np.sum(Distance*Index_label, axis=1)
-        bert_res=softmax(outputs[0].cpu().detach().numpy())
-        res=(alpha*bert_res+(1-alpha)*Knn_res)
-        
-        predict_labels.append(np.argmax(res, axis=1).flatten())
-        bert_labels.append(np.argmax(bert_res, axis=1).flatten())
-        knn_labels.append(np.argmax(Knn_res, axis=1).flatten())
-        true_labels.append(b_labels.flatten())
-
-    true_labels=[y for x in true_labels for y in x]
-    predict_labels=[y for x in predict_labels for y in x]
-    knn_labels=[y for x in knn_labels for y in x]
-    bert_labels=[y for x in bert_labels for y in x]
-    
-    print(classification_report(true_labels,predict_labels,digits=4))
-
-
 def plot_training_history(train_losses, train_acc=None, val_acc=None, val_f1=None, filename='training_history.png'):
     print("Inside plot_training_history!")
     print(f"F1 scores: {val_f1}")
@@ -312,7 +226,7 @@ def plot_training_history(train_losses, train_acc=None, val_acc=None, val_f1=Non
     plt.show()
     plt.savefig(filename)
 
-def knnTest2(config):
+def findOptimalK(config):
     np.random.seed(config['general']['seed'])
     torch.manual_seed(config['general']['seed'])
     torch.cuda.manual_seed_all(config['general']['seed'])
@@ -324,7 +238,7 @@ def knnTest2(config):
     model.to(device)
 
     num_folds = config['training']['num_folds']
-    batch_size = config['knnTest']['test_batch_size']
+    batch_size = config['knnTest']['train_batch_size']
     # test_data=getTestData(tokenizer,model_name,config['data']['data_path'])
     train_data = getTrainData(tokenizer, model_name, config['data']['data_path'])
     test_data = getTrainData(tokenizer, model_name, config['data']['data_path'])
@@ -426,6 +340,84 @@ def knnTest2(config):
     # plt.ylabel("alpha hyperparameter")
     # plt.show()
 
+def knnFit(config):
+    np.random.seed(config['general']['seed'])
+    torch.manual_seed(config['general']['seed'])
+    torch.cuda.manual_seed_all(config['general']['seed'])
+    os.environ["CUDA_VISIBLE_DEVICES"] = config['training']['gpu_ids']
+
+    model_name = config['model']['model_name']
+    tokenizer = AutoTokenizer.from_pretrained(model_name)
+    model = torch.load(config['testing']['model_path'])
+    model.to(device)
+
+    batch_size = config['training']['train_batch_size']
+    train_data = getTrainData(tokenizer, model_name, config['data']['data_path'])
+
+    knn = KNeighborsClassifier(n_neighbors=config['knnTest']['k'])
+    train_sampler = SequentialSampler(train_data)
+    train_dataloader = DataLoader(train_data, sampler=train_sampler, batch_size=batch_size)
+
+    model.eval()
+    all_train_embedds = list()
+    true_labels = []
+    # training embeddings
+    for batch in train_dataloader:
+        b_input_ids, b_input_mask, b_labels = batch[0].to(device), batch[1].to(device), batch[
+            2]  # .long().to(device)
+        outputs = model(b_input_ids,
+                        token_type_ids=None,
+                        attention_mask=b_input_mask)
+
+        train_embedd = outputs[1].detach().cpu().numpy()
+        all_train_embedds.append(train_embedd)
+        # predict_labels.append(np.argmax(res, axis=1).flatten())
+        true_labels.append(b_labels.flatten())
+
+    true_labels = np.array([y for x in true_labels for y in x])
+    train_embeds = np.concatenate(all_train_embedds, axis=0).astype("float32")
+    knn.fit(train_embeds, true_labels)
+    knnPickle = open(config['knnTest']['model_file'] + config['knnTest']['k'], 'wb')
+    # source, destination
+    pickle.dump(knn, knnPickle)
+    # close the file
+    knnPickle.close()
+
+def knnPredict(config):
+    np.random.seed(config['general']['seed'])
+    torch.manual_seed(config['general']['seed'])
+    torch.cuda.manual_seed_all(config['general']['seed'])
+    os.environ["CUDA_VISIBLE_DEVICES"] = config['training']['gpu_ids']
+
+    model_name = config['model']['model_name']
+    tokenizer = AutoTokenizer.from_pretrained(model_name)
+    model = torch.load(config['testing']['model_path'])
+    model.to(device)
+
+    batch_size = config['knnTest']['test_batch_size']
+    test_data = getTestData(tokenizer, model_name, config['data']['data_path'])
+
+    knn = pickle.load(open(config['knnTest']['model_file'] + config['knnTest']['k'], 'rb'))
+    test_sampler = SequentialSampler(test_data)
+    test_dataloader = DataLoader(test_data, sampler=test_sampler, batch_size=batch_size)
+
+    model.eval()
+    all_test_embedds = list()
+    # training embeddings
+    for batch in test_dataloader:
+        b_input_ids, b_input_mask, b_labels = batch[0].to(device), batch[1].to(device), batch[
+            2]  # .long().to(device)
+        outputs = model(b_input_ids,
+                        token_type_ids=None,
+                        attention_mask=b_input_mask)
+
+        test_embedd = outputs[1].detach().cpu().numpy()
+        all_test_embedds.append(test_embedd)
+
+    test_embeds = np.concatenate(all_test_embedds, axis=0).astype("float32")
+    predict_labels = knn.predict(test_embeds)
+    print(predict_labels)
+    saveTestResults(config['data']['data_path'] + "/test.tsv", predict_labels, config['knnTest']['prediction_results'])
 
 def main():
     project_root: Path = Path(__file__).parent
@@ -433,7 +425,8 @@ def main():
         config = yaml.load(f, Loader=yaml.FullLoader)
         
     #train(config)
-    knnTest2(config)
+    knnFit(config)
+    knnPredict(config)
 
 if __name__ == '__main__':
     main()
