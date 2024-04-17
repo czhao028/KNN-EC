@@ -14,7 +14,8 @@ json_file_path = os.path.join(parent_directory, 'data', 'emotionToId.json')
 
 # Read the JSON file
 with open(json_file_path, 'r') as file:
-    emotionNum2ekmanNum = json.load(file)
+    emotionToNum = json.load(file)
+numToEmotion = {number:label for label, number in emotionToNum.items()}
 
 #Same as from https://github.com/cl-victor1/ling573-project/blob/main/src/agentic_workflow/fine_tune.py
 def replace_repeated_punctuation(text): # NB: this function might have adverse impact
@@ -43,7 +44,7 @@ def clean_tweet(tweet):
     return tweet
 
 
-def getData(tokenizer,file_name):
+def getData(tokenizer,file_name, train=True):
     
     data=pd.read_csv(file_name,sep='\t')
     
@@ -53,8 +54,11 @@ def getData(tokenizer,file_name):
     sents=[tokenizer(clean_tweet(sent.lower()),padding='max_length',truncation=True,max_length=128) for sent in data.iloc[:, 1].values.tolist()]
     sents_input_ids=torch.tensor([temp["input_ids"] for temp in sents])
     sents_attn_masks=torch.tensor([temp["attention_mask"] for temp in sents])
-    labels=torch.tensor([emotionNum2ekmanNum[label] for label in data.iloc[:, 2].values.tolist()])
-    dataset=TensorDataset(sents_input_ids,sents_attn_masks,labels)
+    if train:
+        labels=torch.tensor([emotionToNum[label] for label in data.iloc[:, 2].values.tolist()])
+        dataset=TensorDataset(sents_input_ids,sents_attn_masks,labels)
+    else:
+        dataset = TensorDataset(sents_input_ids, sents_attn_masks)
     
     return dataset
 
@@ -87,7 +91,7 @@ def getTestData(tokenizer,bert_name,data_path):
     if os.path.exists(feature_file):
         test_dataset = pickle.load(open(feature_file, 'rb'))
     else:
-        test_dataset = getData(tokenizer,data_path+'/test.tsv')
+        test_dataset = getData(tokenizer,data_path+'/test.tsv', train=False)
         with open(feature_file, 'wb') as w:
             pickle.dump(test_dataset, w)
     return test_dataset
@@ -99,4 +103,4 @@ def saveTestResults(test_data_input_filename, prediction_values, output_file_nam
     writer = csv.writer(tsvfile, delimiter='\t', lineterminator='\n')
     writer.writerow(["ID", "Labels"])
     for i, predict_val in enumerate(prediction_values):
-        writer.writerow([sentIds[i], predict_val])
+        writer.writerow([sentIds[i], numToEmotion[predict_val]])

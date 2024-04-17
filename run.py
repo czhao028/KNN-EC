@@ -67,8 +67,8 @@ def train(config):
             output_attentions=False,  # Whether the model returns attentions weights.
             output_hidden_states=False,  # Whether the model returns all hidden-states.
         )
-        train_dataloader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
-        val_dataloader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False)
+        train_dataloader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True) #randomize order of training data
+        val_dataloader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False) #keep validation data in same order
         optimizer = torch.optim.AdamW(model.parameters(),
                                       lr=eval(config['training']['learning_rate']),
                                       # args.learning_rate - default is 5e-5, our notebook had 2e-5
@@ -241,7 +241,6 @@ def findOptimalK(config):
     batch_size = config['knnTest']['train_batch_size']
     # test_data=getTestData(tokenizer,model_name,config['data']['data_path'])
     train_data = getTrainData(tokenizer, model_name, config['data']['data_path'])
-    test_data = getTrainData(tokenizer, model_name, config['data']['data_path'])
 
     # list_of_arrays = list()
     # i = 0
@@ -260,7 +259,6 @@ def findOptimalK(config):
     # k = config['knnTest']['k']   # we want to see k nearest neighbors
     # alpha=config['knnTest']['alpha']
     k_values = np.arange(3, 20)
-    heat_map = np.zeros(shape=(1, len(k_values)))
     kf = KFold(n_splits=num_folds, shuffle=True, random_state=42)
     allf1scores = list()
     for j, k in enumerate(k_values):
@@ -355,8 +353,7 @@ def knnFit(config):
     train_data = getTrainData(tokenizer, model_name, config['data']['data_path'])
 
     knn = KNeighborsClassifier(n_neighbors=config['knnTest']['k'])
-    train_sampler = SequentialSampler(train_data)
-    train_dataloader = DataLoader(train_data, sampler=train_sampler, batch_size=batch_size)
+    train_dataloader = DataLoader(train_data, batch_size=batch_size, shuffle=True)
 
     model.eval()
     all_train_embedds = list()
@@ -377,7 +374,7 @@ def knnFit(config):
     true_labels = np.array([y for x in true_labels for y in x])
     train_embeds = np.concatenate(all_train_embedds, axis=0).astype("float32")
     knn.fit(train_embeds, true_labels)
-    knnPickle = open(config['knnTest']['model_file'] + config['knnTest']['k'], 'wb')
+    knnPickle = open(config['knnTest']['model_file'] + str(config['knnTest']['k']), 'wb')
     # source, destination
     pickle.dump(knn, knnPickle)
     # close the file
@@ -397,7 +394,7 @@ def knnPredict(config):
     batch_size = config['knnTest']['test_batch_size']
     test_data = getTestData(tokenizer, model_name, config['data']['data_path'])
 
-    knn = pickle.load(open(config['knnTest']['model_file'] + config['knnTest']['k'], 'rb'))
+    knn = pickle.load(open(config['knnTest']['model_file'] + str(config['knnTest']['k']), 'rb'))
     test_sampler = SequentialSampler(test_data)
     test_dataloader = DataLoader(test_data, sampler=test_sampler, batch_size=batch_size)
 
@@ -405,8 +402,7 @@ def knnPredict(config):
     all_test_embedds = list()
     # training embeddings
     for batch in test_dataloader:
-        b_input_ids, b_input_mask, b_labels = batch[0].to(device), batch[1].to(device), batch[
-            2]  # .long().to(device)
+        b_input_ids, b_input_mask = batch[0].to(device), batch[1].to(device)  # .long().to(device)
         outputs = model(b_input_ids,
                         token_type_ids=None,
                         attention_mask=b_input_mask)
@@ -425,7 +421,7 @@ def main():
         config = yaml.load(f, Loader=yaml.FullLoader)
         
     #train(config)
-    knnFit(config)
+    #knnFit(config)
     knnPredict(config)
 
 if __name__ == '__main__':

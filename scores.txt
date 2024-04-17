@@ -1,0 +1,3 @@
+Emotion_Precision:0.5298
+Emotion_Recall:0.4832
+Emotion_F1:0.4852
