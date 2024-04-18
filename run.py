@@ -54,98 +54,99 @@ def train(config):
     kfoldValidationPredictLabels = list()
     kfoldValidationTrueLabels = list()
     # Perform cross-validation
-    for fold, (train_index, val_index) in enumerate(kf.split(dataset)):
-        print(f"Fold {fold + 1}/{num_folds}")
+    #for fold, (train_index, val_index) in enumerate(kf.split(dataset)):
+        #print(f"Fold {fold + 1}/{num_folds}")
 
         # Split data into training and validation sets for this fold
-        train_dataset = [dataset[i] for i in train_index]
-        val_dataset = [dataset[i] for i in val_index]
-        # Initialize model for each fold
-        model = BertForSequenceClassification.from_pretrained(
-            model_name,
-            num_labels=config['model']['num_classes'],
-            output_attentions=False,  # Whether the model returns attentions weights.
-            output_hidden_states=False,  # Whether the model returns all hidden-states.
-        )
-        train_dataloader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True) #randomize order of training data
-        val_dataloader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False) #keep validation data in same order
-        optimizer = torch.optim.AdamW(model.parameters(),
-                                      lr=eval(config['training']['learning_rate']),
-                                      # args.learning_rate - default is 5e-5, our notebook had 2e-5
-                                      eps=1e-8  # args.adam_epsilon  - default is 1e-8.
-                                      )
-        total_steps = num_folds * len(train_dataloader) * config['training']['num_train_epochs']
-        scheduler = get_linear_schedule_with_warmup(optimizer,
-                                                    num_warmup_steps=config['training']['warmup_prop'],
-                                                    # Default value in run_glue.py
-                                                    num_training_steps=total_steps
-                                                    )
+        #train_dataset = [dataset[i] for i in train_index]
+        #val_dataset = [dataset[i] for i in val_index]
+    train_dataset = dataset
+    # Initialize model for each fold
+    model = BertForSequenceClassification.from_pretrained(
+        model_name,
+        num_labels=config['model']['num_classes'],
+        output_attentions=False,  # Whether the model returns attentions weights.
+        output_hidden_states=False,  # Whether the model returns all hidden-states.
+    )
+    train_dataloader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True) #randomize order of training data
+    #val_dataloader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False) #keep validation data in same order
+    optimizer = torch.optim.AdamW(model.parameters(),
+                                  lr=eval(config['training']['learning_rate']),
+                                  # args.learning_rate - default is 5e-5, our notebook had 2e-5
+                                  eps=1e-8  # args.adam_epsilon  - default is 1e-8.
+                                  )
+    total_steps = num_folds * len(train_dataloader) * config['training']['num_train_epochs']
+    scheduler = get_linear_schedule_with_warmup(optimizer,
+                                                num_warmup_steps=config['training']['warmup_prop'],
+                                                # Default value in run_glue.py
+                                                num_training_steps=total_steps
+                                                )
 
-        model.to(device)
-        for epoch in range(num_epochs):
-            # Train model for each epoch within this fold
-            model.train()
-            total_loss,step=0,0
-            trainingAccuracyPerBatch = list()
-            with tqdm(train_dataloader,
-                              desc=f"Fold {fold + 1}/{num_folds} - Epoch {epoch + 1}/{num_epochs} - Training") as tepoch:
-                for batch in tepoch:
-                    tepoch.set_description(f"Epoch {epoch+1}/{config['training']['num_train_epochs']}")
-                    b_input_ids, b_input_mask,b_labels = batch[0].to(device),batch[1].to(device),batch[2].long().to(device)
-                    model.zero_grad()
+    model.to(device)
+    for epoch in range(num_epochs):
+        # Train model for each epoch within this fold
+        model.train()
+        total_loss,step=0,0
+        trainingAccuracyPerBatch = list()
+        with tqdm(train_dataloader,
+                          desc=f"Epoch {epoch + 1}/{num_epochs} - Training") as tepoch:
+            for batch in tepoch:
+                tepoch.set_description(f"Epoch {epoch+1}/{config['training']['num_train_epochs']}")
+                b_input_ids, b_input_mask,b_labels = batch[0].to(device),batch[1].to(device),batch[2].long().to(device)
+                model.zero_grad()
 
-                    outputs = model(b_input_ids,
-                                token_type_ids=None,
-                                attention_mask=b_input_mask,
-                                labels=b_labels)
+                outputs = model(b_input_ids,
+                            token_type_ids=None,
+                            attention_mask=b_input_mask,
+                            labels=b_labels)
 
-                    loss = outputs[0]
-                    total_loss += loss.item()
-                    loss.backward()
-                    torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
-                    optimizer.step()
-                    scheduler.step()
+                loss = outputs[0]
+                total_loss += loss.item()
+                loss.backward()
+                torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+                optimizer.step()
+                scheduler.step()
 
-                    predict=np.argmax(outputs[1].detach().cpu().numpy(), axis=1)
-                    step+=1
-                    training_acc = accuracy_score(batch[2].flatten(),predict.flatten())
-                    trainingAccuracyPerBatch.append(training_acc)
-                    tepoch.set_postfix(average_loss=total_loss/step,loss=loss.item(),f1=f1_score(batch[2].flatten(),predict.flatten(),average='weighted') ,accuracy='{:.3f}'.format(training_acc))
-                    time.sleep(0.0001)
-            history_trainingAcc[fold][epoch] = sum(trainingAccuracyPerBatch) / len(trainingAccuracyPerBatch)
-            averageLossThisEpoch = total_loss / step
-            history_loss[fold][epoch] = averageLossThisEpoch
-            #eval model
-            model.eval()
-            #validation set accuracy/f1 score
-            true_labels_validation,predict_labels_validation=[],[]
-            for batch in val_dataloader:
-                batch = tuple(t.to(device) for t in batch)
-                b_input_ids, b_input_mask, b_labels = batch
-                with torch.no_grad():
-                    outputs = model(b_input_ids,
-                                    token_type_ids=None,
-                                    attention_mask=b_input_mask)
-                logits = outputs[0].detach().cpu().numpy()
-                label_ids = b_labels.to('cpu').numpy()
-                predict_labels_validation.append(np.argmax(logits, axis=1).flatten())
-                true_labels_validation.append(label_ids.flatten())
-            true_labels_validation=[y for x in true_labels_validation for y in x]
-            predict_labels_validation=[y for x in predict_labels_validation for y in x]
-            kfoldValidationTrueLabels.extend(true_labels_validation)
-            kfoldValidationPredictLabels.extend(predict_labels_validation)
+                predict=np.argmax(outputs[1].detach().cpu().numpy(), axis=1)
+                step+=1
+                training_acc = accuracy_score(batch[2].flatten(),predict.flatten())
+                trainingAccuracyPerBatch.append(training_acc)
+                tepoch.set_postfix(average_loss=total_loss/step,loss=loss.item(),f1=f1_score(batch[2].flatten(),predict.flatten(),average='weighted') ,accuracy='{:.3f}'.format(training_acc))
+                time.sleep(0.0001)
+        #history_trainingAcc[fold][epoch] = sum(trainingAccuracyPerBatch) / len(trainingAccuracyPerBatch)
+        averageLossThisEpoch = total_loss / step
+        #history_loss[fold][epoch] = averageLossThisEpoch
+        #eval model
+        model.eval()
+        #validation set accuracy/f1 score
+        #true_labels_validation,predict_labels_validation=[],[]
+            # for batch in val_dataloader:
+            #     batch = tuple(t.to(device) for t in batch)
+            #     b_input_ids, b_input_mask, b_labels = batch
+            #     with torch.no_grad():
+            #         outputs = model(b_input_ids,
+            #                         token_type_ids=None,
+            #                         attention_mask=b_input_mask)
+            #     logits = outputs[0].detach().cpu().numpy()
+            #     label_ids = b_labels.to('cpu').numpy()
+            #     predict_labels_validation.append(np.argmax(logits, axis=1).flatten())
+            #     true_labels_validation.append(label_ids.flatten())
+            # true_labels_validation=[y for x in true_labels_validation for y in x]
+            # predict_labels_validation=[y for x in predict_labels_validation for y in x]
+            # kfoldValidationTrueLabels.extend(true_labels_validation)
+            # kfoldValidationPredictLabels.extend(predict_labels_validation)
             #print(classification_report(true_labels,predict_labels,digits=4))
-            f1=f1_score(kfoldValidationTrueLabels,kfoldValidationPredictLabels,average='macro')
-            history_F1[fold][epoch] = f1
-            validationAccuracy = accuracy_score(kfoldValidationTrueLabels, kfoldValidationPredictLabels)
-            history_validationAcc[fold][epoch] = validationAccuracy
-            if config['training']['save_model'] and num_epochs > 0:
-                torch.save(model, "{}/{}_epoch{}_f1{}.pt".format(config['data']['data_path'], model_name.replace("/", "-"),epoch, f1))
-            print(f"F1 scores: {history_F1}")
-            print(f"LOSSES: {history_loss}")
-            print(f"TRAINING ACCURACIES: {history_trainingAcc}")
-            print(f"VALIDATION ACCURACIES: {history_validationAcc}")
-            plot_training_history(np.mean(history_loss,axis=0), train_acc=np.mean(history_trainingAcc,axis=0), val_acc=np.mean(history_validationAcc,axis=0), val_f1=np.mean(history_F1,axis=0))
+            # f1=f1_score(kfoldValidationTrueLabels,kfoldValidationPredictLabels,average='macro')
+            # history_F1[fold][epoch] = f1
+            # validationAccuracy = accuracy_score(kfoldValidationTrueLabels, kfoldValidationPredictLabels)
+            # history_validationAcc[fold][epoch] = validationAccuracy
+        if config['training']['save_model'] and num_epochs > 0:
+            torch.save(model, "{}/{}_epoch{}.pt".format(config['data']['data_path'], model_name.replace("/", "-"),epoch))
+            # print(f"F1 scores: {history_F1}")
+            # print(f"LOSSES: {history_loss}")
+            # print(f"TRAINING ACCURACIES: {history_trainingAcc}")
+            # print(f"VALIDATION ACCURACIES: {history_validationAcc}")
+            # plot_training_history(np.mean(history_loss,axis=0), train_acc=np.mean(history_trainingAcc,axis=0), val_acc=np.mean(history_validationAcc,axis=0), val_f1=np.mean(history_F1,axis=0))
 
 def test(config):
     np.random.seed(config['general']['seed'])
@@ -238,7 +239,7 @@ def findOptimalK(config):
     model.to(device)
 
     num_folds = config['training']['num_folds']
-    batch_size = config['knnTest']['train_batch_size']
+    batch_size = config['training']['train_batch_size']
     # test_data=getTestData(tokenizer,model_name,config['data']['data_path'])
     train_data = getTrainData(tokenizer, model_name, config['data']['data_path'])
 
@@ -258,15 +259,14 @@ def findOptimalK(config):
 
     # k = config['knnTest']['k']   # we want to see k nearest neighbors
     # alpha=config['knnTest']['alpha']
-    k_values = np.arange(3, 20)
+    k_values = np.arange(1, 10)
     kf = KFold(n_splits=num_folds, shuffle=True, random_state=42)
     allf1scores = list()
     for j, k in enumerate(k_values):
-        true_labels, predict_labels = [], []
-        knn = KNeighborsClassifier(n_neighbors=k_values)
+        knn = KNeighborsClassifier(n_neighbors=k)
         f1scores = list()
         for fold, (train_index, val_index) in enumerate(kf.split(train_data)):
-
+            true_labels, predict_labels = [], []
             train_dataset = [train_data[i] for i in train_index]
             val_dataset = [train_data[i] for i in val_index]
             train_sampler = SequentialSampler(train_dataset)
@@ -274,11 +274,8 @@ def findOptimalK(config):
 
             model.eval()
             train_embedds = list()
-            num = 0
             # training embeddings
             for batch in train_dataloader:
-                num += 1
-                print(num)
                 b_input_ids, b_input_mask, b_labels = batch[0].to(device), batch[1].to(device), batch[
                     2]  # .long().to(device)
                 outputs = model(b_input_ids,
@@ -310,14 +307,13 @@ def findOptimalK(config):
             true_labels_test = np.array([y for x in true_labels_test for y in x])
             test_embeds = np.concatenate(test_embeddings_list, axis=0).astype("float32")
             predict_labels = knn.predict(test_embeds)
-
             print(classification_report(true_labels_test, predict_labels, digits=4))
             f1 = f1_score(true_labels_test, predict_labels, average="macro")
-
             f1scores.append(f1)
         avg_f1 = np.mean(np.array(f1scores))
         print(f"F1 score for k={k} is {avg_f1}")
         allf1scores.append(avg_f1)
+    print(allf1scores)
     plt.plot(k_values, allf1scores)
 
     # Add title and labels
@@ -422,7 +418,8 @@ def main():
         
     #train(config)
     #knnFit(config)
-    knnPredict(config)
+    #knnPredict(config)
+    findOptimalK(config)
 
 if __name__ == '__main__':
     main()
